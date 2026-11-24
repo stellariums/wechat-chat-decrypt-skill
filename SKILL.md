@@ -1,0 +1,271 @@
+---
+name: wechat-chat-decrypt
+description: Read the user's authorized local WeChat history on Windows or Apple Silicon macOS. Use for scoped searches, local exports, summaries, or diagnosing the Skill's runtime, saved keys, and temporary files.
+---
+
+<!-- Modified by stellariums for this adaptation. -->
+
+
+# WeChat Chat Decrypt
+
+Verify local WeChat databases before reading messages, then query through a short-lived plaintext cache. The workflow wraps the pinned Apache-2.0 `huohuoer/wechat-cli` snapshot. Database inspection, cryptography, and query execution run locally.
+
+## Hard Barriers
+
+Proceed only when all are true:
+
+1. The user explicitly asks to access their own local WeChat data, or data they are authorized to process.
+2. The target account is logged in on the same Windows PC or Mac where Codex is running.
+3. Keep databases, keys, raw exports, and raw message output on the machine. When using a hosted assistant, filter and redact locally before any content enters the conversation or tool output.
+
+Stop when any are true:
+
+- The request targets someone else's account, device, backup, or credentials without clear authorization.
+- A supplied WeChat installer fails bundle ID, Tencent signer, version, build, architecture, or code-signature validation.
+- The user declines the required backup before a downgrade.
+- The machine is unsupported Linux/Intel macOS. Windows is supported through the guarded Python scanner path.
+
+Keep raw preflight output, account IDs, contact names, private paths, and diagnostic logs out of shared reports. Use generic labels and report aggregate status. Never put keys, credentials, backups, or chat exports in Git.
+
+## Locate The Skill
+
+Set `SKILL_DIR` to the directory containing this `SKILL.md`. Use absolute paths in every command.
+
+macOS:
+
+```bash
+SKILL_DIR="$HOME/.codex/skills/wechat-chat-decrypt"
+PY="$HOME/.local/share/wechat-chat-decrypt/venv/bin/python"
+```
+
+Windows PowerShell:
+
+```powershell
+$SkillDir = Join-Path $env:USERPROFILE '.codex\skills\wechat-chat-decrypt'
+$Py = Join-Path $env:LOCALAPPDATA 'wechat-chat-decrypt\venv\Scripts\python.exe'
+```
+
+If the skill is running from a repository checkout, use that checkout as `SKILL_DIR`.
+
+## Workflow
+
+### 1. Bootstrap The Private Runtime
+
+Run once:
+
+macOS: `bash "$SKILL_DIR/scripts/bootstrap.sh"`.
+
+Windows: `& (Join-Path $SkillDir 'scripts\bootstrap.ps1')`.
+
+This installs the vendored, pinned `wechat-cli` into `~/.local/share/wechat-chat-decrypt/venv`. It does not install a global package.
+
+### 2. Run A Read-Only Preflight
+
+macOS: `"$PY" "$SKILL_DIR/scripts/wechat_decrypt.py" preflight`.
+
+Windows: `& $Py (Join-Path $SkillDir 'scripts\wechat_decrypt.py') preflight`.
+
+Use the JSON `next_actions` locally. A saved key count is a hint about existing state. Confirm that the configuration belongs to the intended account and run `verify`. On success, proceed to a bounded query with the safe wrapper, even if the current client is newer than the supported extraction version. If verification fails, check account selection, local data availability, and the runtime first. Use the supported setup path only if keys must be obtained again.
+
+- `verified` (macOS): WeChat 4.1.8 build 37261, the tested version.
+- `Windows`: report detected data roots and `Weixin.exe` status. The bundled scanner is guarded by HMAC and SQLite verification; do not infer compatibility from a process opening successfully. The only verified Windows client is Weixin 4.1.8.101. Extraction refuses newer or unverified clients instead of scanning them blindly.
+- `upstream_compatible_unverified`: an older 4.x build covered by upstream's stated range, but not verified by this skill. Tell the user before proceeding.
+- `unsupported_newer`: obtaining new keys requires the verified client. If existing keys fail verification and new keys are needed, follow the applicable installer branch after the user confirms the backup and version change.
+- Multiple accounts: ask which currently logged-in account to use, then pass its exact `db_dir` to `prepare-probe`.
+- No accounts: ask the user to launch WeChat, log in, and wait for local messages to sync.
+- Data access failure: on macOS grant Full Disk Access; on Windows keep Codex/PowerShell at the same integrity level as WeChat.
+
+### 3. Newer WeChat: Download, Validate, And Install The DMG
+
+Do not download an old WeChat build from an arbitrary mirror. This skill intentionally does not bundle Tencent's proprietary installer or download it in the background. After the user confirms the downgrade and data backup, direct them to the tested DMG on Tencent's CDN, or accept a local copy:
+
+<https://dldir1v6.qq.com/weixin/Universal/Mac/xWeChatMac_universal_4.1.8.100_37261.dmg>
+
+Treat the URL as a download entry point, not as proof of authenticity. The installer must still pass `inspect-dmg` before installation.
+
+Ask the user to download `xWeChatMac_universal_4.1.8.100_37261.dmg` from the Tencent CDN above, or provide the same file from a trusted local source. Before downgrade, require a current Time Machine or separate copy backup of the local `xwechat_files` directory.
+
+Validate without installing:
+
+```bash
+"$PY" "$SKILL_DIR/scripts/wechat_decrypt.py" inspect-dmg --dmg "/absolute/path/to/file.dmg"
+```
+
+Continue only when `accepted` is `true`. The check requires:
+
+- bundle ID `com.tencent.xinWeChat`
+- version `4.1.8`, build `37261`
+- Tencent Team ID `5A4RE8SF68`
+- valid code signature
+- `arm64` executable support
+
+After the user confirms both the data backup and that WeChat is fully closed:
+
+```bash
+sudo "$PY" "$SKILL_DIR/scripts/wechat_decrypt.py" install-dmg \
+  --dmg "/absolute/path/to/file.dmg" \
+  --confirm-data-backup \
+  --confirm-wechat-closed
+```
+
+This backs up the existing app bundle separately. It does not modify the chat-data directory.
+
+### 4. Windows Weixin 4.1.8.101 Installer And Update Guard
+
+Use the Tencent CDN installer below and verify its SHA-256 before running it:
+
+<https://dldir1v6.qq.com/weixin/Universal/Windows/WeChatWin_4.1.8.exe>
+
+Expected SHA-256: `0c4091f5480231f0805c18c845715e36a404f7447ea61fa7c8c33fbfd5707e9b`.
+
+The same installer and digest are listed at <https://github.com/cscnk52/wechat-windows-versions/releases/tag/v4.1.8.101>. Back up the user's `xwechat_files` directory and fully quit Weixin before installing. With the user's approval, block automatic upgrades after installation and login:
+
+```powershell
+& $Py (Join-Path $SkillDir 'scripts\wechat_decrypt.py') update-guard status
+# Run the next command in an elevated PowerShell:
+& $Py (Join-Path $SkillDir 'scripts\wechat_decrypt.py') update-guard block
+```
+
+The guard blocks outbound traffic only for the exact `WeixinUpdate.exe` binaries and stops a running updater. It does not block Weixin's normal chat traffic. To intentionally upgrade later, run `update-guard unblock` from an elevated PowerShell.
+
+### 5. Re-Sign WeChat For Local Memory Access
+
+Explain that this modifies the local app signature, not chat data. The official signature can be restored by reinstalling WeChat from Tencent.
+
+Ask the user to quit WeChat completely, then run:
+
+```bash
+sudo "$PY" "$SKILL_DIR/scripts/wechat_decrypt.py" resign
+```
+
+The script preserves current entitlements, adds only `com.apple.security.get-task-allow`, and verifies the resulting signature. The user must then reopen WeChat and log in. Never request or capture the user's administrator password in chat; let `sudo` collect it interactively.
+
+### 6. Extract Keys Without Printing Them
+
+#### Windows
+
+Keep WeChat for Windows open and logged in. Run the commands as the same Windows user that owns WeChat. If several accounts are listed, pass the selected account's exact `db_dir`:
+
+```powershell
+& $Py (Join-Path $SkillDir 'scripts\wechat_decrypt.py') prepare-probe
+$manifest = '<manifest path from the JSON output>'
+& $Py (Join-Path $SkillDir 'scripts\wechat_decrypt.py') extract-keys --manifest $manifest
+```
+
+Select `xwechat_files\<wxid>\db_storage`; the workflow uses the SQLCipher v4 scanner.
+
+If the scanner reports `OpenProcess` or `ReadProcessMemory` access denied, relaunch WeChat and Codex/PowerShell at the same integrity level, or use an Administrator PowerShell. Do not disable Defender or kernel protections.
+
+#### macOS
+
+Create a private mirror containing only the first encrypted SQLite page of each database (the scanner needs the page HMAC; no message rows are copied):
+
+```bash
+"$PY" "$SKILL_DIR/scripts/wechat_decrypt.py" prepare-probe \
+  --db-dir "/absolute/path/from/preflight/db_storage"
+```
+
+Read the returned `manifest` path, then run:
+
+```bash
+sudo "$PY" "$SKILL_DIR/scripts/wechat_decrypt.py" extract-keys \
+  --manifest "/private/tmp/wechat-chat-decrypt-probe-.../manifest.json"
+```
+
+The scanner's raw output contains keys, so the wrapper captures and discards it. Successful output reports counts only. Keys and config are written to `~/.wechat-cli/` with private permissions, and any previous state is backed up locally.
+
+### 7. Verify Before Reading Messages
+
+macOS: `"$PY" "$SKILL_DIR/scripts/wechat_decrypt.py" verify`.
+
+Windows: `& $Py (Join-Path $SkillDir 'scripts\wechat_decrypt.py') verify`.
+
+Acceptance requires:
+
+- one or more database keys saved
+- HMAC verification for the matched encrypted pages
+- at least one message database key
+- SQLite `quick_check` equals `ok`
+- temporary plaintext removed
+
+The Windows verifier decrypts a temporary message database and runs SQLite `quick_check`; no message rows are returned during verification.
+
+This command does not read message rows or contact names.
+
+To create a shareable archive, review and commit the source in a standalone Git checkout, then run the platform's packaging script:
+
+```bash
+bash "$SKILL_DIR/scripts/package-skill.sh" "/absolute/path/to/wechat-chat-decrypt-skill.zip"
+```
+
+### 8. macOS Update Guard
+
+Ask for explicit confirmation before changing update behavior. Then:
+
+```bash
+sudo "$PY" "$SKILL_DIR/scripts/wechat_decrypt.py" update-guard block
+```
+
+Check later with:
+
+```bash
+"$PY" "$SKILL_DIR/scripts/wechat_decrypt.py" update-guard status
+```
+
+Restore updater permissions before intentionally updating:
+
+```bash
+sudo "$PY" "$SKILL_DIR/scripts/wechat_decrypt.py" update-guard unblock --enable-automatic-updates
+```
+
+### 9. Query Through The Safe Wrapper
+
+Always use the safe wrapper; do not call a global `wechat-cli`. It gives each command a private temporary directory and removes plaintext databases when the command exits.
+
+macOS:
+
+```bash
+"$SKILL_DIR/scripts/wechat-cli-safe" sessions --limit 20 --format text
+"$SKILL_DIR/scripts/wechat-cli-safe" history "联系人" --limit 50 --format text
+"$SKILL_DIR/scripts/wechat-cli-safe" search "关键词" --chat "群名" --format text
+"$SKILL_DIR/scripts/wechat-cli-safe" export "联系人" --format markdown --output "/private/local/path/chat.md"
+```
+
+Windows PowerShell:
+
+```powershell
+& (Join-Path $SkillDir 'scripts\wechat-cli-safe.ps1') sessions --limit 20 --format text
+& (Join-Path $SkillDir 'scripts\wechat-cli-safe.ps1') history '联系人' --limit 50 --format text
+& (Join-Path $SkillDir 'scripts\wechat-cli-safe.ps1') search '关键词' --chat '群名' --format text
+& (Join-Path $SkillDir 'scripts\wechat-cli-safe.ps1') export '联系人' --format markdown --output (Join-Path $env:LOCALAPPDATA 'wechat-private-export.md')
+```
+
+Only read the requested chats and dates. A successful `verify` establishes database readability, while a bounded query establishes that the query path works. For an installation smoke test, capture the result locally and report success, failure, or partial coverage without displaying session names. Keep private exports outside the repository. Voice messages and pictures require separate processing.
+
+For action-item summaries, retain the action, due date if explicit, and confirmation status. Resolve relative dates against the message timestamp. Paraphrase content and substitute consistent labels for private sources when the result is shared.
+
+### 10. Clean Up
+
+After ordinary querying, the safe wrapper cleans itself. Audit and remove leftovers with:
+
+```bash
+macOS: `"$PY" "$SKILL_DIR/scripts/wechat_decrypt.py" cleanup --include-probes`; Windows: `& $Py (Join-Path $SkillDir 'scripts\wechat_decrypt.py') cleanup --include-probes`.
+```
+
+Add `--include-persistent` only when the user explicitly asks to remove a persistent decrypted directory. This preserves keys and config.
+
+## Reporting
+
+Report only:
+
+- app version/build and compatibility status
+- number of encrypted databases, matched keys, and HMAC-verified databases
+- SQLite verification result
+- whether update blocking is active
+- any unsupported media limits
+
+Do not include key material, raw scanner output, complete personal identifiers, or credentials found inside messages. When summarizing chats, paraphrase sensitive content and redact addresses, phone numbers, passwords, API keys, remote-control codes, and subscription URLs.
+
+## Troubleshooting
+
+Read [references/troubleshooting.md](references/troubleshooting.md) for exact recovery branches, [references/compatibility.md](references/compatibility.md) before changing supported versions or the pinned upstream snapshot, and [references/windows-run.md](references/windows-run.md) for the real Windows validation record and current-version boundary.

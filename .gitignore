@@ -1,0 +1,20 @@
+# Modified by stellariums for this adaptation.
+.DS_Store
+*.zip
+__pycache__/
+*.pyc
+.pytest_cache/
+vendor/wechat-cli/build/
+*.egg-info/
+.env
+.env.*
+.wechat-cli/
+xwechat_files/
+db_storage/
+all_keys.json
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
